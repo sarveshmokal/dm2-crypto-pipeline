@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: fct_market_window
+    description: "Gold fact table — one row per (asset, minute) window."
+    columns:
+      - name: market_window_id
+        description: "Surrogate key for the (asset, minute) grain."
+        tests:
+          - unique
+          - not_null
+      - name: asset_id
+        description: "FK to dim_asset."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_asset')
+              field: asset_id
+      - name: realized_vol
+        description: "Realized volatility; must be non-negative."
+        tests:
+          - not_null
+
+  - name: dim_asset
+    description: "Gold dimension — descriptive attributes per asset."
+    columns:
+      - name: asset_id
+        description: "Primary key."
+        tests:
+          - unique
+          - not_null
