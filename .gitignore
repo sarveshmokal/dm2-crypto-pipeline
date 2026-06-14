@@ -1,0 +1,25 @@
+# dbt artifacts (auto-generated, should not be committed)
+dbt/crypto_dbt/target/
+dbt/crypto_dbt/dbt_packages/
+dbt/crypto_dbt/logs/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Credentials / secrets — NEVER commit these
+*.json
+!dbt/**/*.json
+profiles.yml
+*-key.json
+service-account*.json
+.env
+
+# OS / editor junk
+.DS_Store
+*.swp
+.idea/
+.vscode/
