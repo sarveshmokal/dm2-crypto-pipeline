@@ -1,8 +1,7 @@
 version: 2
-
 models:
   - name: fct_market_window
-    description: "Gold fact table — one row per (asset, minute) window."
+    description: "Gold fact table (batch serving layer) — one row per (asset, minute) window."
     columns:
       - name: market_window_id
         description: "Surrogate key for the (asset, minute) grain."
@@ -16,16 +15,55 @@ models:
           - relationships:
               to: ref('dim_asset')
               field: asset_id
+      - name: time_id
+        description: "FK to dim_time."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_time')
+              field: time_id
       - name: realized_vol
         description: "Realized volatility; must be non-negative."
         tests:
           - not_null
+
+  - name: fct_market_window_stream
+    description: "Gold fact table (streaming speed layer) — one row per (asset, minute) window from the live stream."
+    columns:
+      - name: market_window_id
+        description: "Surrogate key for the (asset, minute) grain."
+        tests:
+          - unique
+          - not_null
+      - name: asset_id
+        description: "FK to dim_asset."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_asset')
+              field: asset_id
+      - name: time_id
+        description: "FK to dim_time."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_time')
+              field: time_id
 
   - name: dim_asset
     description: "Gold dimension — descriptive attributes per asset."
     columns:
       - name: asset_id
         description: "Primary key."
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_time
+    description: "Gold dimension — time attributes at minute grain (data-cube time dimension)."
+    columns:
+      - name: time_id
+        description: "Primary key (smart key YYYYMMDDHHMM)."
         tests:
           - unique
           - not_null

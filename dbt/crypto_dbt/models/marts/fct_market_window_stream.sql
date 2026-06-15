@@ -9,6 +9,7 @@ with stg as (
 select
     to_hex(md5(concat(symbol, '|', cast(window_start as string)))) as market_window_id,
     symbol            as asset_id,
+    cast(format_timestamp('%Y%m%d%H%M', window_start) as int64) as time_id,
     window_start,
     window_end,
     open_price, high_price, low_price, close_price,
