@@ -27,5 +27,15 @@ select
     format_timestamp('%A', window_start)                  as day_name,
     extract(dayofweek from window_start)                  as day_of_week,
     -- weekend flag (1=Sun..7=Sat in BigQuery)
-    case when extract(dayofweek from window_start) in (1,7) then true else false end as is_weekend
+    case when extract(dayofweek from window_start) in (1,7) then true else false end as is_weekend,
+    -- trading session by UTC hour (crypto trades 24/7, but traditional-market
+    -- sessions still drive activity). lets us test if volatility clusters by session.
+    case
+        when extract(hour from window_start) between 0  and 7  then 'Asian'
+        when extract(hour from window_start) between 7  and 13 then 'European'
+        when extract(hour from window_start) between 13 and 21 then 'US'
+        else 'Off-hours'
+    end as trading_session,
+    -- US equity market hours ~13:30-20:00 UTC (9:30-16:00 ET)
+    case when extract(hour from window_start) between 13 and 20 then true else false end as is_us_market_hours
 from all_windows

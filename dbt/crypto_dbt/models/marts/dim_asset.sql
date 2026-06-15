@@ -33,6 +33,19 @@ select
         when 'AVAX' then 'Avalanche'
         else 'Unknown'
     end                                  as asset_name,
+    -- market-cap tier classification (by well-known relative size of these 8 assets).
+    -- lets us analyse whether realized volatility differs by tier.
+    case replace(a.asset_id, 'USDT', '')
+        when 'BTC' then 'Large Cap'
+        when 'ETH' then 'Large Cap'
+        when 'BNB' then 'Large Cap'
+        when 'SOL' then 'Mid Cap'
+        when 'XRP' then 'Mid Cap'
+        when 'DOGE' then 'Mid Cap'
+        when 'ADA' then 'Mid Cap'
+        when 'AVAX' then 'Small Cap'
+        else 'Unknown'
+    end                                  as market_cap_tier,
     m.reference_price,                               -- from defillama
     m.confidence                         as price_confidence,
     m.price_timestamp,
