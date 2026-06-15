@@ -1,0 +1,19 @@
+[Unit]
+Description=Airflow scheduler (crypto batch pipeline automation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=g100004344
+Environment="AIRFLOW_HOME=/home/g100004344/airflow"
+Environment="PATH=/home/g100004344/airflow_venv/bin:/usr/local/bin:/usr/bin:/bin"
+WorkingDirectory=/home/g100004344/airflow
+ExecStart=/home/g100004344/airflow_venv/bin/airflow scheduler
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/g100004344/airflow_scheduler.log
+StandardError=append:/home/g100004344/airflow_scheduler.log
+
+[Install]
+WantedBy=multi-user.target

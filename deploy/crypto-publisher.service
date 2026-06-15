@@ -1,0 +1,17 @@
+[Unit]
+Description=Crypto WebSocket-to-PubSub publisher (Dataflow streaming ingestion)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=g100004344
+WorkingDirectory=/home/g100004344/dm2-crypto-pipeline
+ExecStart=/home/g100004344/streaming_venv/bin/python3 /home/g100004344/dm2-crypto-pipeline/spark/publish_trades_to_pubsub.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/g100004344/publisher.log
+StandardError=append:/home/g100004344/publisher.log
+
+[Install]
+WantedBy=multi-user.target
