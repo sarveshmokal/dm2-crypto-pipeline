@@ -28,6 +28,7 @@ SHADED_GCS_JAR = "/home/g100004344/jars/gcs-connector-shaded.jar"
 spark = (
     SparkSession.builder
     .appName("silver_stream")
+    .config("spark.sql.shuffle.partitions", "4")
     # only the BigQuery connector via packages; GCS connector comes from the
     # shaded jar below to avoid the Guava conflict
     .config("spark.jars.packages",
@@ -70,7 +71,7 @@ clean = (
 
 agg = (
     clean
-    .withWatermark("ts", "2 minutes")
+    .withWatermark("ts", "30 seconds")
     .groupBy(F.col("symbol"), F.window(F.col("ts"), "1 minute"))
     .agg(
         F.first("price").alias("open"),
