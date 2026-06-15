@@ -7,7 +7,7 @@ TABLE   = f"{PROJECT}.bronze.trades_raw"
 
 # today's partition, matches where the ingestion script wrote
 today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-uri = f"gs://{BUCKET}/bronze/trades/symbol=btcusdt/dt={today}/trades_*.json"
+uri = f"gs://{BUCKET}/bronze/trades/symbol=*/dt={today}/trades_*.json"
 
 client = bigquery.Client(project=PROJECT)
 
