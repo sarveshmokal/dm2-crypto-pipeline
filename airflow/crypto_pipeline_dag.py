@@ -28,25 +28,25 @@ with DAG(
     # 1. ingest live trades -> GCS
     ingest_trades = BashOperator(
         task_id="ingest_trades",
-        bash_command=f"{ENV_PATH} && cd {REPO} && python3 ingestion/ingest_trades_to_gcs.py",
+        bash_command=f"{ENV_PATH} && cd {REPO} && /home/g100004344/streaming_venv/bin/python3 ingestion/ingest_trades_to_gcs.py",
     )
 
     # 2. load raw json from GCS into the bronze table (python client, consistent auth)
     load_bronze = BashOperator(
         task_id="load_bronze",
-        bash_command=f"{ENV_PATH} && cd {REPO} && python3 ingestion/load_trades_to_bronze.py",
+        bash_command=f"{ENV_PATH} && cd {REPO} && /home/g100004344/streaming_venv/bin/python3 ingestion/load_trades_to_bronze.py",
     )
 
     # 3. bronze -> silver with pyspark
     spark_silver = BashOperator(
         task_id="spark_silver",
-        bash_command=f"{ENV_PATH} && cd {REPO} && python3 spark/silver_trades_minute.py",
+        bash_command=f"{ENV_PATH} && cd {REPO} && /home/g100004344/streaming_venv/bin/python3 spark/silver_trades_minute.py",
     )
 
     # 4. silver -> gold with dbt (build + test)
     dbt_gold = BashOperator(
         task_id="dbt_gold",
-        bash_command=f"{ENV_PATH} && cd {DBT_DIR} && dbt run && dbt test",
+        bash_command=f"{ENV_PATH} && cd {DBT_DIR} && /home/g100004344/dbt_venv/bin/dbt run && /home/g100004344/dbt_venv/bin/dbt test",
     )
 
     # dependency order: each runs only after the previous succeeds
