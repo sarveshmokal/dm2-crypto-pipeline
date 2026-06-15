@@ -19,7 +19,7 @@ with DAG(
     dag_id="crypto_pipeline",
     description="Binance -> bronze -> silver (spark) -> gold (dbt)",
     default_args=default_args,
-    schedule_interval="@hourly",      # runs automatically every hour
+    schedule_interval="*/15 * * * *",  # runs automatically every 15 minutes
     start_date=datetime(2026, 6, 1),
     catchup=False,                    # don't backfill old runs
     tags=["crypto", "medallion"],
