@@ -14,7 +14,8 @@ select
     window_end,
     open_price, high_price, low_price, close_price,
     vwap, volume, trade_count,
-    price_variance,
+    realized_variance,
+    realized_vol,
     buy_volume, sell_volume, signed_volume,
     ofi,
     -- short-horizon return over the window (close vs open), in log terms

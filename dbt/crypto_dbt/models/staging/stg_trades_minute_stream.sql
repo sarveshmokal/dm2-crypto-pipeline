@@ -1,6 +1,6 @@
 -- staging: read the streaming silver table (speed layer)
 -- note: streaming computes a lighter metric set than batch -
--- price_variance is a proxy, not full realized variance / bipower
+-- streaming now computes TRUE realized variance/vol; bipower/jumps stay batch-only
 with source as (
     select * from `dm2-crypto-microstructure.silver.trades_minute_stream`
 )
@@ -15,7 +15,8 @@ select
     cast(vwap  as float64)            as vwap,
     cast(volume as float64)           as volume,
     cast(trade_count as int64)        as trade_count,
-    cast(price_variance as float64)   as price_variance,
+    cast(realized_variance as float64) as realized_variance,
+    cast(realized_vol as float64)      as realized_vol,
     cast(buy_volume as float64)       as buy_volume,
     cast(sell_volume as float64)      as sell_volume,
     cast(signed_volume as float64)    as signed_volume,
