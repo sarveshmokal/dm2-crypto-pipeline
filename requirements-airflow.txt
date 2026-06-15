@@ -1,0 +1,5 @@
+# airflow_venv: batch orchestration (scheduler runs the DAG every 15 min)
+# install with the official constraints file to pin transitive deps:
+#   pip install "apache-airflow==2.9.3" --constraint \
+#     "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.11.txt"
+apache-airflow==2.9.3

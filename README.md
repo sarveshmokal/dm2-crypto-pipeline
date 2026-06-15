@@ -1,263 +1,160 @@
-# Real-Time Crypto Market Microstructure Analytics Pipeline
+# Real-Time Crypto Market Microstructure Analytics
 
-An end-to-end, automated data pipeline that ingests cryptocurrency market data
-**in real time**, refines it through a **medallion architecture**
-(bronze → silver → gold) on **Google Cloud Platform**, and exposes
-analysis-ready tables for a BI dashboard.
+A real-time data pipeline that ingests high-frequency crypto trade data, computes
+two quant-finance microstructure signals -- **Realized Volatility (RV)** and
+**Order-Flow Imbalance (OFI)** -- and serves them through a medallion-layered
+BigQuery warehouse. Built for *Data Management 2* (SRH Hochschule Heidelberg).
 
-The pipeline runs **two processing paths** — a scheduled **batch** path and a
-continuous **streaming** path — that converge in the gold layer. This is the
-**Lambda architecture** (a batch/serving layer plus a speed layer) implemented
-inside a medallion lakehouse.
+**Research question:** does order-flow imbalance relate to realized volatility and
+short-horizon returns across calm vs. turbulent market regimes?
 
-**Course:** Data Management 2 — SRH Hochschule Heidelberg
-**Author:** Sarvesh Mokal
-
----
-
-## 1. What this project does
-
-The pipeline studies two quantitative-finance signals derived from
-high-frequency market data:
-
-- **Realized Volatility (RV)** — how violently price moves, estimated from
-  high-frequency trades using realized variance and the jump-robust
-  **bipower variation** estimator.
-- **Order-Flow Imbalance (OFI)** — the net buy/sell pressure, derived from
-  trade direction.
-
-**Research question:** Does order-flow imbalance relate to realized volatility
-and short-horizon returns, and does that relationship differ between calm and
-turbulent market regimes?
-
-Crypto is used because it is the only asset class offering **free, real-time,
-high-frequency** market data. The methodology transfers directly to equities,
-FX, and futures.
+The pipeline follows a **Lambda architecture** (batch layer + speed layer) on top of
+a **medallion** data model (bronze -> silver -> gold), running over 8 liquid assets
+(BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX).
 
 ---
 
-## 2. Architecture
+## Architecture
 
-Two paths, one medallion. The **batch path** is orchestrated by Apache Airflow;
-the **streaming path** runs continuously as system services.
+```
+                              Binance trade WebSocket (real-time, 8 symbols)
+                                          |
+                 +------------------------+------------------------+
+                 |                                                 |
+          BATCH LAYER                                        SPEED LAYER
+                 |                                                 |
+   ingest_trades_to_gcs.py                            publish_trades_to_pubsub.py
+       -> GCS (bronze JSON,                                -> Pub/Sub topic
+          partitioned symbol=/dt=)                            "crypto-trades"
+                 |                                                 |
+   load_trades_to_bronze.py                           dataflow_trades_pipeline.py
+       -> bronze.trades_raw (BigQuery)                    (Apache Beam on Dataflow,
+                 |                                          1-min event-time windows)
+   silver_trades_minute.py (PySpark)                            |
+       -> silver.trades_minute                          -> silver.trades_minute_dataflow
+                 |                                                 |
+                 +------------------------+------------------------+
+                                          |
+                                   dbt (gold layer)
+                          star schema: dim_asset, dim_time,
+                          fct_market_window, fct_market_window_stream,
+                          fct_ofi_return_by_regime  (+ 17 data-quality tests)
+                                          |
+                                  BigQuery gold  ->  Looker Studio dashboard
 
-```text
-                         ┌─────────────────────── BATCH PATH (Airflow DAG, every 15 min) ───────────────────────┐
-
-  DefiLlama REST API ───► ingest_metadata_to_gcs.py ──► GCS (raw JSON) ──► BigQuery bronze ──► PySpark ──► BigQuery silver
-  Binance REST (sample) ► ingest_trades_to_gcs.py    ─►                    (load_trades_to_bronze)  (silver_trades_minute)   │
-                                                                                                                            │
-                         └────────────────────────────────────────────────────────────────────────────────────┘          │
-                                                                                                                            ▼
-                                                                                                              dbt  ──►  BigQuery GOLD
-                                                                                                          (star schema + 17 tests)
-                                                                                                                            ▲
-                         ┌──────────────────── STREAMING PATH (systemd, continuous) ──────────────────────┐               │
-                                                                                                            │               │
-  Binance WebSocket ───► stream_trades_to_gcs.py ──► GCS (raw JSON, live) ──► Spark Structured Streaming ──► BigQuery silver┘
-   (sub-second trades)    (WS→GCS shim service)        = streaming "bronze"     (silver_stream, watermark)   (trades_minute_stream)
-
-                                                                                                              GOLD ──► BI dashboard
-                                                                                                       (Power BI / Looker Studio)
+   Orchestration: Apache Airflow DAG (crypto_pipeline) runs the batch path every
+   15 minutes. Airflow scheduler and the Pub/Sub publisher run as systemd services
+   on a Compute Engine VM. DefiLlama REST API is a second (batch) source feeding
+   asset metadata into dim_asset.
 ```
 
-**Key architectural decisions**
-
-- **Medallion** (bronze → silver → gold) is the *refinement* axis; **Lambda**
-  (batch serving layer + streaming speed layer) is the *latency* axis. They
-  coexist: two paths refine through the same medallion layers.
-- **ELT, not ETL** — raw data is loaded first, then transformed *in-warehouse*
-  with dbt (SQL). BigQuery holds both raw (bronze) and modeled (gold) data.
-- **Streaming "bronze" is the GCS lake.** Spark Structured Streaming reads raw
-  files directly from GCS (schema-on-read), so the lake *is* the raw layer for
-  the streaming path. The batch path additionally materializes a BigQuery bronze
-  table because it uses BigQuery's batch-load mechanism.
-
-| Layer         | Technology                                  | Purpose                                                    |
-|---------------|---------------------------------------------|------------------------------------------------------------|
-| Ingestion     | Python (websocket-client, urllib)           | Live trades from Binance; batch reference from DefiLlama    |
-| Raw lake      | Google Cloud Storage                        | Immutable raw JSON (date-partitioned); streaming bronze     |
-| Bronze        | BigQuery                                     | Batch raw data loaded as-is, queryable                      |
-| Silver        | PySpark (batch) + Spark Structured Streaming | Clean, dedupe, per-minute windows, compute RV + OFI         |
-| Gold          | dbt on BigQuery                             | Kimball star schema (2 facts, 2 dimensions) + 17 tests      |
-| Orchestration | Apache Airflow (batch) + systemd (streaming) | Automated execution of both paths                          |
-| Presentation  | Power BI / Looker Studio                     | Live panels (silver) + analytical panels (gold)             |
+A second data source, the **DefiLlama REST API**, supplies asset metadata
+(reference prices) loaded into `bronze.asset_metadata` and surfaced in `dim_asset`.
 
 ---
 
-## 3. Repository structure
+## The signals (silver/gold computation)
 
-```text
-dm2-crypto-pipeline/
-  ingestion/
-    ingest_trades_to_gcs.py      Binance trades -> GCS (batch sample)
-    ingest_metadata_to_gcs.py    DefiLlama reference data -> GCS (batch)
-    load_trades_to_bronze.py     GCS -> BigQuery bronze (Python client load)
-  spark/
-    silver_trades_minute.py      BATCH bronze -> silver: full estimators (RV, bipower, jumps, OFI)
-    stream_trades_to_gcs.py      STREAMING shim: Binance WebSocket -> GCS (runs as systemd service)
-    silver_stream.py             STREAMING bronze(GCS) -> silver: windowed agg + watermark (systemd service)
-  dbt/crypto_dbt/
-    models/
-      staging/
-        stg_trades_minute.sql           view over batch silver
-        stg_trades_minute_stream.sql    view over streaming silver
-      marts/
-        fct_market_window.sql           FACT - batch serving layer (asset x minute)
-        fct_market_window_stream.sql    FACT - streaming speed layer (asset x minute)
-        dim_asset.sql                   DIMENSION - asset attributes
-        dim_time.sql                    DIMENSION - time attributes (minute grain)
-        fct_ofi_return_by_regime.sql    analysis mart - rolling regime classification
-        schema.yml                      17 data-quality + referential-integrity tests
-  airflow/
-    crypto_pipeline_dag.py       batch DAG: ingest -> bronze -> silver -> gold (every 15 min)
-  README.md
+- **Realized Variance / Volatility** -- sum of squared 1-second log returns within
+  each minute; `realized_vol = sqrt(realized_variance)`.
+- **Bipower Variation** -- jump-robust variance estimator, `(pi/2) * sum(|r_i|*|r_i-1|)`.
+- **Jump component** -- `max(realized_variance - bipower_variation, 0)`, isolating
+  discontinuous price jumps.
+- **Order-Flow Imbalance** -- `(buy_volume - sell_volume) / total_volume`, using
+  Binance's `is_buyer_maker` flag, in [-1, +1].
+- **Volatility regime** -- trailing z-score of realized vol classifies each minute
+  as calm / normal / turbulent (in `fct_ofi_return_by_regime`).
+
+---
+
+## Star schema (gold)
+
+Grain: one row per (asset, minute).
+
+| Table                       | Type            | Notes                                    |
+|-----------------------------|-----------------|------------------------------------------|
+| `dim_asset`                 | dimension       | 8 assets; name, market_cap_tier, DefiLlama reference_price |
+| `dim_time`                  | dimension       | minute grain; hour, day_of_week, is_weekend, trading_session, is_us_market_hours |
+| `fct_market_window`         | fact (batch)    | RV, bipower, jump, OFI, OHLC, VWAP        |
+| `fct_market_window_stream`  | fact (speed)    | same grain, real-time speed layer         |
+| `fct_ofi_return_by_regime`  | fact (analysis) | regime classification + z-scores          |
+
+Foreign keys (`asset_id`, `time_id`) are verified by dbt relationship tests.
+
+---
+
+## Repository layout
+
+```
+ingestion/   ingest_trades_to_gcs.py      batch ingest: WebSocket -> GCS bronze
+             load_trades_to_bronze.py      GCS -> bronze.trades_raw (per-symbol URI list)
+spark/       silver_trades_minute.py       PySpark: bronze -> silver.trades_minute
+             publish_trades_to_pubsub.py   speed layer: WebSocket -> Pub/Sub
+             dataflow_trades_pipeline.py    Apache Beam on Dataflow -> silver_dataflow
+             silver_stream.py               Spark Structured Streaming alternative (documented)
+dbt/crypto_dbt/   dbt project: staging -> marts (gold star schema) + tests
+airflow/     crypto_pipeline_dag.py         batch orchestration DAG (every 15 min)
+deploy/      *.service                      systemd unit files for the VM
+requirements-*.txt                          pinned dependencies per environment
 ```
 
 ---
 
-## 4. Data sources
+## Reproducing the pipeline
 
-| Source             | Type       | Role                                              | Cadence       |
-|--------------------|------------|---------------------------------------------------|---------------|
-| **Binance WebSocket** | Real-time | Live trade stream (BTCUSDT) — the speed layer    | Sub-second    |
-| **DefiLlama REST**    | Batch     | Asset reference / price metadata — the batch ref | On DAG run    |
+The project uses **three Python virtual environments** on a Compute Engine VM
+(Debian 12, Python 3.11), reflecting three independent toolchains:
 
-Two sources, one real-time — satisfying the requirement. (A third source,
-CoinGecko, was scoped as a redundant price cross-check but not built, since two
-sources already meet the requirement.)
-
----
-
-## 5. Data layers in detail
-
-**Bronze (raw).** Trade messages are stored exactly as received. For the batch
-path: raw JSON in GCS *and* a BigQuery `bronze` table (loaded via the Python
-BigQuery client). For the streaming path: raw JSON in GCS only — the lake is the
-raw layer, read directly by Spark (schema-on-read).
-
-**Silver (clean).** Two engines, by path:
-
-- *Batch* (`silver_trades_minute.py`): casts types, converts millisecond
-  timestamps, derives trade side from the buyer-maker flag, removes invalid
-  rows, aggregates into **per-minute windows**, and computes OHLC, VWAP, volume,
-  trade count, **realized variance**, **realized volatility**, **bipower
-  variation** (jump-robust), **jump component**, buy/sell volume, signed volume,
-  and **OFI**.
-- *Streaming* (`silver_stream.py`): Spark Structured Streaming reads raw files
-  from GCS, applies a **watermark** for late data, performs the same per-minute
-  windowed aggregation, and computes a lighter, lower-latency metric set
-  (price-variance proxy + OFI). It writes to a separate silver table.
-
-> **Why two silver tables?** The batch layer computes the full statistical
-> estimator suite (bipower/jumps need strict per-trade ordering); the streaming
-> layer computes a lighter set for low latency. Merging them into one column
-> would put two *different* statistics (true realized variance vs. a proxy) in
-> one field, violating dimensional-modeling semantics. Keeping them separate is
-> the Lambda batch-vs-speed distinction made explicit.
-
-**Gold (modeled).** dbt transforms silver into a **Kimball star schema**:
-
-- `fct_market_window` — **fact**, batch serving layer, one row per (asset, minute).
-- `fct_market_window_stream` — **fact**, streaming speed layer, one row per (asset, minute).
-- `dim_asset` — **dimension**, asset attributes.
-- `dim_time` — **dimension**, time attributes at minute grain (supports OLAP
-  roll-up / drill-down by hour, day, weekday).
-- `fct_ofi_return_by_regime` — **analysis mart**: rolling-window regime
-  classification (calm / normal / turbulent via trailing z-score) for the
-  research question.
-
-Both facts carry foreign keys to both dimensions (`asset_id`, `time_id`).
-
-**Data quality — 17 dbt tests:** uniqueness and not-null on all keys, plus
-**referential-integrity** (`relationships`) tests from each fact to each
-dimension. All pass.
-
----
-
-## 6. Automation
-
-Both paths run automatically — no manual steps in normal operation.
-
-**Batch path — Apache Airflow.** The DAG `crypto_pipeline_dag.py` runs four
-dependent tasks on a 15-minute schedule:
-
-```text
-ingest_trades  >>  load_bronze  >>  spark_silver  >>  dbt_gold (dbt run && dbt test)
-```
-
-The final `dbt run` rebuilds the **entire** gold layer — both facts, both
-dimensions, the regime mart — and runs all 17 tests.
-
-**Streaming path — systemd services.** Two services on the Compute Engine VM:
-
-- `crypto-shim.service` — runs the WebSocket → GCS shim.
-- `crypto-stream.service` — runs the Spark Structured Streaming job.
-
-Both are **enabled** (auto-start on boot) with `Restart=always` (auto-restart on
-failure). Verified by rebooting the VM and confirming both services came back up
-with no manual intervention.
-
----
-
-## 7. How to run
-
-**Automated (normal operation).**
-
+### 1. Streaming / Spark environment
 ```bash
-# Batch: the Airflow scheduler runs the DAG every 15 minutes.
-airflow scheduler        # (one-off start; thereafter automatic)
-
-# Streaming: the systemd services auto-start on VM boot.
-sudo systemctl status crypto-shim.service crypto-stream.service
+python3 -m venv ~/streaming_venv
+~/streaming_venv/bin/pip install -r requirements-streaming.txt
 ```
+Runs: `ingest_trades_to_gcs.py`, `load_trades_to_bronze.py`,
+`silver_trades_minute.py`, `publish_trades_to_pubsub.py`, `dataflow_trades_pipeline.py`.
 
-**Manual (for development / one-off runs).**
-
+### 2. dbt environment
 ```bash
-# Batch path
-python3 ingestion/ingest_trades_to_gcs.py
-python3 ingestion/load_trades_to_bronze.py
-python3 spark/silver_trades_minute.py
-cd dbt/crypto_dbt && dbt run && dbt test
-
-# Streaming path (one-off, foreground)
-python3 spark/stream_trades_to_gcs.py &     # shim
-python3 spark/silver_stream.py              # streaming job
+python3 -m venv ~/dbt_venv
+~/dbt_venv/bin/pip install -r requirements-dbt.txt
+```
+Configure `~/.dbt/profiles.yml` (BigQuery, oauth, dataset=gold, location=EU), then:
+```bash
+cd dbt/crypto_dbt
+~/dbt_venv/bin/dbt run && ~/dbt_venv/bin/dbt test
 ```
 
----
+### 3. Airflow environment
+```bash
+python3 -m venv ~/airflow_venv
+~/airflow_venv/bin/pip install -r requirements-airflow.txt   # see file for constraints
+export AIRFLOW_HOME=~/airflow
+~/airflow_venv/bin/airflow db init
+cp airflow/crypto_pipeline_dag.py ~/airflow/dags/
+```
 
-## 8. Requirements coverage
+### GCP prerequisites
+- A GCP project with BigQuery, GCS, Pub/Sub, Dataflow enabled.
+- Datasets `bronze`, `silver`, `gold` (location EU).
+- A GCS bucket for raw landing.
+- A Pub/Sub topic `crypto-trades` + subscription `crypto-trades-sub`.
+- VM service account with the cloud-platform scope.
 
-| # | Requirement                          | How it is met                                                        |
-|---|--------------------------------------|----------------------------------------------------------------------|
-| 1 | ≥ 2 data sources, ≥ 1 real-time      | Binance WebSocket (real-time) + DefiLlama REST (batch)               |
-| 2 | Extract, clean, load into BigQuery   | Python ingestion + PySpark cleaning + BigQuery bronze/silver layers  |
-| 3 | Transform with dbt                   | dbt builds the gold star schema (2 facts, 2 dimensions) + 17 tests   |
-| 4 | Include Spark                        | PySpark (batch silver) + Spark Structured Streaming (streaming silver)|
-| 5 | Pipeline runs automatically          | Airflow DAG (batch) + systemd services (streaming, self-healing)     |
-| 6 | Presentation                         | See presentation deck / `docs/`                                      |
-
----
-
-## 9. Engineering notes (selected design decisions)
-
-- **Shaded GCS connector** resolves a Guava version conflict between the
-  GCS-connector and BigQuery-connector jars in the streaming job (relocated
-  Guava classes prevent the clash).
-- **Spark `shuffle.partitions` tuned 200 → 4** to match the small data volume
-  and the 2-core VM, eliminating task-scheduling overhead that caused streaming
-  micro-batches to fall behind the live edge.
-- **Environment isolation** via separate Python virtualenvs (Airflow vs.
-  streaming) to avoid dependency conflicts.
-- **Cost discipline:** plain Compute Engine VM instead of Dataproc/Composer;
-  total GCP spend kept well within a small credit budget.
+### Automation (systemd, on the VM)
+```bash
+sudo cp deploy/*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now crypto-publisher.service        # speed layer ingest
+sudo systemctl enable --now crypto-airflow-scheduler.service # batch orchestration
+```
+The Airflow scheduler then runs the `crypto_pipeline` DAG every 15 minutes.
 
 ---
 
-## 10. Tech stack
+## Cost notes
 
-Google Cloud Platform (Cloud Storage, BigQuery, Compute Engine) · Python ·
-Apache Spark (PySpark + Structured Streaming) · dbt · Apache Airflow · systemd ·
-Power BI / Looker Studio
+Designed to run within a student budget (GCP education credit). Cloud Composer
+(managed Airflow, ~$300-400/month) was deliberately avoided in favour of a single
+small VM running Airflow under systemd. A billing budget with alerts at 50/80/100%
+guards spend. Dataflow does not scale to zero, so the streaming job is drained and
+the VM stopped when not demonstrating.
