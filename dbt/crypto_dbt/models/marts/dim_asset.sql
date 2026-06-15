@@ -26,6 +26,11 @@ select
         when 'BTC' then 'Bitcoin'
         when 'ETH' then 'Ethereum'
         when 'SOL' then 'Solana'
+        when 'BNB' then 'BNB'
+        when 'XRP' then 'XRP'
+        when 'ADA' then 'Cardano'
+        when 'DOGE' then 'Dogecoin'
+        when 'AVAX' then 'Avalanche'
         else 'Unknown'
     end                                  as asset_name,
     m.reference_price,                               -- from defillama
